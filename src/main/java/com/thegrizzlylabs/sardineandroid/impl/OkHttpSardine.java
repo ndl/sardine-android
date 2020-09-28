@@ -1,6 +1,9 @@
 package com.thegrizzlylabs.sardineandroid.impl;
 
 import android.text.TextUtils;
+import android.net.TrafficStats;
+import android.os.StrictMode;
+import android.util.Log;
 
 import com.thegrizzlylabs.sardineandroid.DavAce;
 import com.thegrizzlylabs.sardineandroid.DavAcl;
@@ -29,6 +32,7 @@ import com.thegrizzlylabs.sardineandroid.model.PrincipalCollectionSet;
 import com.thegrizzlylabs.sardineandroid.model.Prop;
 import com.thegrizzlylabs.sardineandroid.model.Propertyupdate;
 import com.thegrizzlylabs.sardineandroid.model.Propfind;
+import com.thegrizzlylabs.sardineandroid.model.Propname;
 import com.thegrizzlylabs.sardineandroid.model.Propstat;
 import com.thegrizzlylabs.sardineandroid.model.QuotaAvailableBytes;
 import com.thegrizzlylabs.sardineandroid.model.QuotaUsedBytes;
@@ -41,9 +45,11 @@ import com.thegrizzlylabs.sardineandroid.util.SardineUtil;
 
 import org.w3c.dom.Element;
 
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.Socket;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -51,6 +57,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import javax.net.SocketFactory;
 import javax.xml.namespace.QName;
 
 import okhttp3.Credentials;
@@ -62,6 +69,7 @@ import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import okhttp3.logging.HttpLoggingInterceptor;
 import okio.BufferedSink;
 import okio.Okio;
 
@@ -72,9 +80,45 @@ import okio.Okio;
 public class OkHttpSardine implements Sardine {
 
     private OkHttpClient client;
+    private String TAG = "OkHttpSardine";
+    private int THREAD_STATS_TAG = 20190228;
 
     public OkHttpSardine() {
-        this.client = new OkHttpClient.Builder().protocols(Arrays.asList(Protocol.HTTP_1_1)).build();
+        HttpLoggingInterceptor logging = new HttpLoggingInterceptor();
+        logging.setLevel(HttpLoggingInterceptor.Level.HEADERS);
+        this.client = new OkHttpClient.Builder()
+                // Work-around for HTTP/2 bug in OkHttp where it goes into infinite retries, see
+                // https://github.com/square/okhttp/issues/3312.
+                .protocols(Arrays.asList(Protocol.HTTP_1_1))
+                // Work-around for StrictMode OkHttp incompatibility, see
+                // https://github.com/square/okhttp/issues/3537.
+                .socketFactory(
+                        new DelegatingSocketFactory(SocketFactory.getDefault()) {
+                                @Override protected Socket configureSocket(Socket socket) throws IOException {
+                                        // This is hacky as we'll set this on every socket creation
+                                        // instead of once per thread, but there seems to be no way to
+                                        // do this cleanly :-(
+                                        TrafficStats.setThreadStatsTag(THREAD_STATS_TAG);
+                                        TrafficStats.tagSocket(socket);
+                                        // Make sure we detect everything and log it.
+                                        StrictMode.setThreadPolicy(
+                                                new StrictMode.ThreadPolicy.Builder()
+                                                        .detectAll()
+                                                        .permitDiskReads()
+                                                        .permitDiskWrites()
+                                                        .permitNetwork()
+                                                        .penaltyLog()
+                                                        .build());
+                                        StrictMode.setVmPolicy(
+                                                new StrictMode.VmPolicy.Builder()
+                                                        .detectAll()
+                                                        .penaltyLog()
+                                                        .build());
+                                        return socket;
+                                }
+                        })
+                .addInterceptor(logging)
+                .build();
     }
 
     public OkHttpSardine(OkHttpClient client) {
@@ -126,7 +170,7 @@ public class OkHttpSardine implements Sardine {
 
     @Override
     public List<DavResource> list(String url, int depth) throws IOException {
-        return list(url, depth, true);
+        return list(url, depth, true, false);
     }
 
     @Override
@@ -146,14 +190,18 @@ public class OkHttpSardine implements Sardine {
     }
 
     @Override
-    public List<DavResource> list(String url, int depth, boolean allProp) throws IOException {
-        if (allProp) {
-            Propfind body = new Propfind();
-            body.setAllprop(new Allprop());
-            return propfind(url, depth, body);
-        } else {
+    public List<DavResource> list(String url, int depth, boolean allProp, boolean propName) throws IOException {
+        if (!allProp && !propName) {
             return list(url, depth, Collections.<QName>emptySet());
         }
+        Propfind body = new Propfind();
+        if (allProp) {
+            body.setAllprop(new Allprop());
+        }
+        if (propName) {
+            body.setPropname(new Propname());
+        }
+        return propfind(url, depth, body);
     }
 
     @Override
@@ -328,7 +376,9 @@ public class OkHttpSardine implements Sardine {
     public void put(String url, InputStream dataStream) throws IOException {
         InputStreamRequestBody requestBody = new InputStreamRequestBody(
                 null, -1, dataStream);
-        put(url, requestBody);
+        Headers.Builder headersBuilder = new Headers.Builder();
+        headersBuilder.add("Transfer-encoding", "chunked");
+        put(url, requestBody, headersBuilder.build());
 
     }
 
@@ -337,7 +387,9 @@ public class OkHttpSardine implements Sardine {
         MediaType mediaType = contentType == null ? null : MediaType.parse(contentType);
         InputStreamRequestBody requestBody = new InputStreamRequestBody(
                 mediaType, -1, dataStream);
-        put(url, requestBody);
+        Headers.Builder headersBuilder = new Headers.Builder();
+        headersBuilder.add("Transfer-encoding", "chunked");
+        put(url, requestBody, headersBuilder.build());
     }
 
     @Override
@@ -346,6 +398,7 @@ public class OkHttpSardine implements Sardine {
         InputStreamRequestBody requestBody = new InputStreamRequestBody(
                 mediaType, -1, dataStream);
         Headers.Builder headersBuilder = new Headers.Builder();
+        headersBuilder.add("Transfer-encoding", "chunked");
         if (expectContinue) {
             headersBuilder.add("Expect", "100-Continue");
         }
@@ -357,6 +410,9 @@ public class OkHttpSardine implements Sardine {
         InputStreamRequestBody requestBody = new InputStreamRequestBody(
                 mediaType, contentLength, dataStream);
         Headers.Builder headersBuilder = new Headers.Builder();
+        if (contentLength == -1) {
+            headersBuilder.add("Transfer-encoding", "chunked");
+        }
         if (expectContinue) {
             headersBuilder.add("Expect", "100-Continue");
         }
@@ -366,7 +422,10 @@ public class OkHttpSardine implements Sardine {
     public void put(String url, InputStream dataStream, Map<String, String> headers) throws IOException {
         InputStreamRequestBody requestBody = new InputStreamRequestBody(
                 null, -1, dataStream);
-        put(url, requestBody, Headers.of(headers));
+        Headers.Builder headersBuilder = new Headers.Builder();
+        headersBuilder.add("Transfer-encoding", "chunked");
+        headersBuilder.addAll(Headers.of(headers));
+        put(url, requestBody, headersBuilder.build());
     }
 
     private class InputStreamRequestBody extends RequestBody {
@@ -386,13 +445,46 @@ public class OkHttpSardine implements Sardine {
         }
 
         @Override
-        public long contentLength() throws IOException {
-            return contentLength;
-        }
+        public long contentLength() throws IOException { return contentLength; }
 
         @Override
         public void writeTo(BufferedSink sink) throws IOException {
-            sink.writeAll(Okio.source(stream));
+            if (this.stream == null) {
+                throw new IOException("Stream is null, possibly exhausted and abandoned already?");
+            }
+            try {
+                long readBytes = sink.writeAll(Okio.source(stream));
+                Log.i(TAG, String.format("InputStreamRequestBody.writeTo wrote %d bytes.", readBytes));
+            } catch (Exception ex) {
+                Log.i(TAG, "Got exception, trying to reset the stream.", ex);
+                try {
+                    if (stream.markSupported()) {
+                        stream.reset();
+                    } else {
+                        Log.i(TAG, "Input stream doesn't support reset(), abandoning.");
+                        this.stream = null;
+                    }
+                } catch(Exception ex2) {
+                    Log.i(TAG, "Extra exception while trying to reset the stream, abandoning.", ex2);
+                    this.stream = null;
+                }
+                throw ex;
+            }
+            // Even if we're finished, it doesn't mean the request is successful, so it's possible
+            // that the request will be retried. Therefore try to reset() the stream and close /
+            // nullify it if we're too far past the mark.
+            try {
+                Log.i(TAG, "Trying to reset the stream after successful reading.");
+                if (stream.markSupported()) {
+                    stream.reset();
+                } else {
+                    Log.i(TAG, "Input stream doesn't support reset(), abandoning.");
+                    this.stream = null;
+                }
+            } catch (IOException ex) {
+                Log.i(TAG, "Failed to reset the stream, abandoning.", ex);
+                this.stream = null;
+            }
         }
     }
 

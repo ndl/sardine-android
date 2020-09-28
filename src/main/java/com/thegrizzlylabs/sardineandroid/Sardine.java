@@ -80,10 +80,11 @@ public interface Sardine
 	 *              -1 for infinite recursion)
 	 * @param allProp If allprop should be used, which can be inefficient sometimes;
 	 * warning: no allprop does not retrieve custom props, just the basic ones
+	 * @param propName If true, retrieve all available properties names.
 	 * @return List of resources for this URI including the parent resource itself
 	 * @throws IOException I/O error or HTTP response validation failure
 	 */
-	List<DavResource> list(String url, int depth, boolean allProp) throws IOException;
+	List<DavResource> list(String url, int depth, boolean allProp, boolean propName) throws IOException;
 
 	/**
 	 * Fetches a resource using WebDAV <code>PROPFIND</code>. Only the specified properties
