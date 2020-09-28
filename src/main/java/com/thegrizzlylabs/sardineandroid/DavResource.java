@@ -118,6 +118,89 @@ public class DavResource {
         }
     }
 
+    public static class Builder
+    {
+        private String href;
+        private Date creation;
+        private Date modified;
+        private String contentType;
+        private String etag;
+        private String displayName;
+        private List<QName> resourceTypes= Collections.<QName>emptyList();
+        private String contentLanguage;
+        private Long contentLength = -1L;
+        private List<QName> supportedReports = Collections.<QName>emptyList();
+        private Map<QName, String> customProps = Collections.<QName, String>emptyMap();
+
+        public Builder(String href)
+        {
+            this.href = href;
+        }
+
+        public Builder createdOn(Date creation)
+        {
+            this.creation = creation;
+            return this;
+        }
+
+        public Builder modifiedOn(Date modified)
+        {
+            this.modified = modified;
+            return this;
+        }
+
+        public Builder ofType(String contentType)
+        {
+            this.contentType = contentType;
+            return this;
+        }
+
+        public Builder ofLength(Long contentLength)
+        {
+            this.contentLength = contentLength;
+            return this;
+        }
+
+        @SuppressWarnings("unused")
+        public Builder withEtag(String etag)
+        {
+            this.etag = etag;
+            return this;
+        }
+
+        public Builder withDisplayName(String displayName) {
+            this.displayName = displayName;
+            return this;
+        }
+
+        public Builder withResourceTypes(List<QName> resourceTypes) {
+            this.resourceTypes = resourceTypes;
+            return this;
+        }
+
+        public Builder inLanguage(String contentLanguage) {
+            this.contentLanguage = contentLanguage;
+            return this;
+        }
+
+        @SuppressWarnings("unused")
+        public Builder supportingReports(List<QName> supportedReports) {
+            this.supportedReports = supportedReports;
+            return this;
+        }
+
+        public Builder withCustomProps(Map<QName, String> customProps) {
+            this.customProps = customProps;
+            return this;
+        }
+
+        public DavResource build() throws URISyntaxException
+        {
+            return new DavResource(href, creation, modified, contentType, contentLength, etag,
+                    displayName, resourceTypes, contentLanguage, supportedReports, customProps);
+        }
+    }
+
     /**
      * Represents a webdav response block.
      *
