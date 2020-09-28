@@ -46,6 +46,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -57,9 +58,12 @@ import okhttp3.Headers;
 import okhttp3.Interceptor;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
+import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import okio.BufferedSink;
+import okio.Okio;
 
 /**
  * Created by guillaume on 08/11/2017.
@@ -70,7 +74,7 @@ public class OkHttpSardine implements Sardine {
     private OkHttpClient client;
 
     public OkHttpSardine() {
-        this.client = new OkHttpClient.Builder().build();
+        this.client = new OkHttpClient.Builder().protocols(Arrays.asList(Protocol.HTTP_1_1)).build();
     }
 
     public OkHttpSardine(OkHttpClient client) {
@@ -319,6 +323,77 @@ public class OkHttpSardine implements Sardine {
             addLockTokenToHeaders(headersBuilder, url, lockToken);
         }
         put(url, requestBody, headersBuilder.build());
+    }
+    @Override
+    public void put(String url, InputStream dataStream) throws IOException {
+        InputStreamRequestBody requestBody = new InputStreamRequestBody(
+                null, -1, dataStream);
+        put(url, requestBody);
+
+    }
+
+    @Override
+    public void put(String url, InputStream dataStream, String contentType) throws IOException {
+        MediaType mediaType = contentType == null ? null : MediaType.parse(contentType);
+        InputStreamRequestBody requestBody = new InputStreamRequestBody(
+                mediaType, -1, dataStream);
+        put(url, requestBody);
+    }
+
+    @Override
+    public void put(String url, InputStream dataStream, String contentType, boolean expectContinue) throws IOException {
+        MediaType mediaType = contentType == null ? null : MediaType.parse(contentType);
+        InputStreamRequestBody requestBody = new InputStreamRequestBody(
+                mediaType, -1, dataStream);
+        Headers.Builder headersBuilder = new Headers.Builder();
+        if (expectContinue) {
+            headersBuilder.add("Expect", "100-Continue");
+        }
+        put(url, requestBody, headersBuilder.build());
+    }
+    @Override
+    public void put(String url, InputStream dataStream, String contentType, boolean expectContinue, long contentLength) throws IOException {
+        MediaType mediaType = contentType == null ? null : MediaType.parse(contentType);
+        InputStreamRequestBody requestBody = new InputStreamRequestBody(
+                mediaType, contentLength, dataStream);
+        Headers.Builder headersBuilder = new Headers.Builder();
+        if (expectContinue) {
+            headersBuilder.add("Expect", "100-Continue");
+        }
+        put(url, requestBody, headersBuilder.build());
+    }
+
+    public void put(String url, InputStream dataStream, Map<String, String> headers) throws IOException {
+        InputStreamRequestBody requestBody = new InputStreamRequestBody(
+                null, -1, dataStream);
+        put(url, requestBody, Headers.of(headers));
+    }
+
+    private class InputStreamRequestBody extends RequestBody {
+        private MediaType contentType;
+        private long contentLength;
+        private InputStream stream;
+
+        public InputStreamRequestBody(MediaType contentType, long contentLength, InputStream stream) {
+            this.contentType = contentType;
+            this.contentLength = contentLength;
+            this.stream = stream;
+        }
+
+        @Override
+        public MediaType contentType() {
+            return contentType;
+        }
+
+        @Override
+        public long contentLength() throws IOException {
+            return contentLength;
+        }
+
+        @Override
+        public void writeTo(BufferedSink sink) throws IOException {
+            sink.writeAll(Okio.source(stream));
+        }
     }
 
     private void put(String url, RequestBody requestBody) throws IOException {
